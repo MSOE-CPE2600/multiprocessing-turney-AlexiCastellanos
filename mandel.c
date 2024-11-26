@@ -6,15 +6,16 @@
 //  Converted to use jpg instead of BMP and other minor changes
 //  
 ///
-/// 
-//  mandel.c
-//  Based on example code found here:
-//  https://users.cs.fiu.edu/~cpoellab/teaching/cop4610_fall22/project3.html
-//
-//  Converted to use jpg instead of BMP and other minor changes
-//  
-///
 
+
+/***
+* Modified by Alexi Castellaos
+* Filename: mandel.c
+* Date: 11/26/24
+* Description: This program generates animated Mandelbrot set frames as JPEG images using parallel
+*  processing with synchronized child processes and customizable parameters for center, scale, resolution, and iterations.
+*
+***/
 
 #include <stdlib.h>
 #include <stdio.h>
