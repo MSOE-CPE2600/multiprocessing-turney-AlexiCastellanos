@@ -72,14 +72,14 @@ ffmpeg -i mandel_out_%d.jpg mandel_movie.mpg
 This command will create a video (`mandel_movie.mpg`) from the frames, simulating a zoom-in effect on the Mandelbrot set.
 
 ## Example Output
-The program will generate output files named like `mandel_out_1.jpg`, `mandel_out_2.jpg`, and so on, until all `NUM_FRAMES` have been generated.
+The program will generate output files named `mandel_out_1.jpg`, `mandel_out_2.jpg`, and so on, until all `NUM_FRAMES` have been generated.
 
 ## Troubleshooting
 - **Images Taking Too Long**: If frames take too long to generate, try reducing the image resolution (`-W` and `-H`) or the maximum number of iterations (`-m`). You can also reduce the number of frames (`NUM_FRAMES`) or increase the number of child processes (`-c`).
 - **Zooming Out Instead of In**: If the generated images appear to be zooming out, make sure that the `scale` is properly decreasing over time. The correct formula for zooming in is `double scale = xscale / (1 + frame * 0.1);`.
 
 ## Part 1: Modified Mandel.c
-The mandel program was modfied. This program utilized child processes to generate 50 images, progressively altering one or more image parameters; such as scale, orgin and size.The flexibility of choosing the number of children at the command line was integrated into the program, and command-line interpretation uses the getopt function. A semaphore is used for managing the children processes.
+The mandel program was modified. This program utilized child processes to generate 50 images, progressively altering one or more image parameters; such as scale, origin and size. The flexibility of choosing the number of children at the command line was integrated into the program, and command-line interpretation uses the getopt function. A semaphore is used for managing the children's processes.
 
 ## Graph image
 
@@ -92,4 +92,4 @@ The mandel program was modfied. This program utilized child processes to generat
 20 - 5.398
 
 
-s displayed through the data above and through my graph it is clear to see that the more children processes there is, the smaller the runtime. However it seems as if the amount of children stop helping the speedup over time because the graph seems as it starting to plateu
+as displayed through the data above and my graph shows that the more children processes there are, the smaller the runtime. However, it seems as if the number of children stopped helping the speedup over time because the graph appears as if it is starting to plateau
