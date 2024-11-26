@@ -6,92 +6,185 @@
 //  Converted to use jpg instead of BMP and other minor changes
 //  
 ///
+/// 
+//  mandel.c
+//  Based on example code found here:
+//  https://users.cs.fiu.edu/~cpoellab/teaching/cop4610_fall22/project3.html
+//
+//  Converted to use jpg instead of BMP and other minor changes
+//  
+///
+
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <string.h>
+#include <semaphore.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <time.h>
 #include "jpegrw.h"
+#include <fcntl.h>  // for O_CREAT
 
-// local routines
-static int iteration_to_color( int i, int max );
-static int iterations_at_point( double x, double y, int max );
-static void compute_image( imgRawImage *img, double xmin, double xmax,
-									double ymin, double ymax, int max );
+
+#define NUM_FRAMES 50
+
+//prototypes
+static int iteration_to_color(int i, int max);
+static int iterations_at_point(double x, double y, int max);
+static void compute_image(imgRawImage *img, double xmin, double xmax,
+                           double ymin, double ymax, int max);
 static void show_help();
 
-
-int main( int argc, char *argv[] )
+// Function to generate a single Mandelbrot frame and save it as a JPEG image
+void generateMandelFrame(double x, double y, double scale, const char *outfile, int image_width, int image_height, int max)
 {
-	char c;
-
-	// These are the default configuration values used
-	// if no command line arguments are given.
-	const char *outfile = "mandel.jpg";
-	double xcenter = 0;
-	double ycenter = 0;
-	double xscale = 4;
-	double yscale = 0; // calc later
-	int    image_width = 1000;
-	int    image_height = 1000;
-	int    max = 1000;
-
-	// For each command line argument given,
-	// override the appropriate configuration value.
-
-	while((c = getopt(argc,argv,"x:y:s:W:H:m:o:h"))!=-1) {
-		switch(c) 
-		{
-			case 'x':
-				xcenter = atof(optarg);
-				break;
-			case 'y':
-				ycenter = atof(optarg);
-				break;
-			case 's':
-				xscale = atof(optarg);
-				break;
-			case 'W':
-				image_width = atoi(optarg);
-				break;
-			case 'H':
-				image_height = atoi(optarg);
-				break;
-			case 'm':
-				max = atoi(optarg);
-				break;
-			case 'o':
-				outfile = optarg;
-				break;
-			case 'h':
-				show_help();
-				exit(1);
-				break;
-		}
-	}
-
-	// Calculate y scale based on x scale (settable) and image sizes in X and Y (settable)
-	yscale = xscale / image_width * image_height;
-
-	// Display the configuration of the image.
-	printf("mandel: x=%lf y=%lf xscale=%lf yscale=%1f max=%d outfile=%s\n",xcenter,ycenter,xscale,yscale,max,outfile);
-
-	// Create a raw image of the appropriate size.
-	imgRawImage* img = initRawImage(image_width,image_height);
-
-	// Fill it with a black
-	setImageCOLOR(img,0);
-
-	// Compute the Mandelbrot image
-	compute_image(img,xcenter-xscale/2,xcenter+xscale/2,ycenter-yscale/2,ycenter+yscale/2,max);
-
-	// Save the image in the stated file.
-	storeJpegImageFile(img,outfile);
-
-	// free the mallocs
-	freeRawImage(img);
-
-	return 0;
+    imgRawImage *img = initRawImage(image_width, image_height);
+    setImageCOLOR(img, 0);
+    compute_image(img, x - scale / 2, x + scale / 2, y - scale / 2, y + scale / 2, max);
+    storeJpegImageFile(img, outfile);
+    freeRawImage(img);
 }
 
+int main(int argc, char *argv[])
+{
+    char c;
+
+    // These are the default configuration values used
+    // if no command line arguments are given.
+    double xcenter = 0;
+    double ycenter = 0;
+    double xscale = 4;
+    int image_width = 1000;
+    int image_height = 1000;
+    int max = 1000;
+    int num_children = 1; // default number of children
+    char output_filename[256] = "mandel_frame"; // Default filename prefix
+
+    // For each command line argument given,
+    // override the appropriate configuration value.
+    while ((c = getopt(argc, argv, "x:y:s:W:H:m:o:c:h")) != -1)
+    {
+        switch (c)
+        {
+            case 'x':
+                xcenter = atof(optarg);
+                break;
+            case 'y':
+                ycenter = atof(optarg);
+                break;
+            case 's':
+                xscale = atof(optarg);
+                break;
+            case 'W':
+                image_width = atoi(optarg);
+                break;
+            case 'H':
+                image_height = atoi(optarg);
+                break;
+            case 'm':
+                max = atoi(optarg);
+                break;
+            case 'o':
+                strncpy(output_filename, optarg, sizeof(output_filename) - 1);
+                output_filename[sizeof(output_filename) - 1] = '\0'; // Ensure null-termination
+                break;
+            case 'c':
+                num_children = atoi(optarg);
+                break;
+            case 'h':
+                show_help();
+                exit(1);
+                break;
+            default:
+                fprintf(stderr, "Unknown option: -%c\n", c);
+                show_help();
+                return 1;
+        }
+    }
+
+    printf("Generating Mandel movie with %d images using %d children...\n", NUM_FRAMES, num_children);
+
+    // Calculate frames assigned to each child process
+    int frames_per_child = NUM_FRAMES / num_children;
+    int remaining_frames = NUM_FRAMES % num_children;
+
+    // Create semaphores to enforce order
+    sem_t *semaphores[num_children];
+    for (int i = 0; i < num_children; i++) {
+        char sem_name[20];
+        snprintf(sem_name, sizeof(sem_name), "/child_sem_%d", i);
+        semaphores[i] = sem_open(sem_name, O_CREAT, 0644, (i == 0) ? 1 : 0);
+    }
+
+    for (int child = 0; child < num_children; child++) {
+        pid_t pid = fork();
+
+        if (pid < 0) {
+            perror("Fork failed");
+            exit(1);
+        }
+
+        if (pid == 0) {
+            // Child process code
+
+            // Wait for its turn
+            sem_wait(semaphores[child]);
+
+            // Determine the frames this child will generate
+            int start_frame = child * frames_per_child + (child < remaining_frames ? child : remaining_frames) + 1;
+            int end_frame = start_frame + frames_per_child - 1;
+
+            if (child < remaining_frames) {
+                end_frame++;
+            }
+
+            // Print assigned frames
+            printf("Child %d assigned frames from %d to %d\n", child, start_frame, end_frame);
+
+            // Generate frames for this child process
+            for (int frame = start_frame; frame <= end_frame; frame++) {
+                double scale = xscale / (1 + frame * 0.1);
+                char frame_outfile[300];
+                snprintf(frame_outfile, sizeof(frame_outfile), "%s_%d.jpg", output_filename, frame);
+
+                generateMandelFrame(xcenter, ycenter, scale, frame_outfile, image_width, image_height, max);
+
+                printf("Child %d generated frame %d\n", child, frame);
+            }
+
+            // Signal the next child, if it exists
+            if (child + 1 < num_children) {
+                sem_post(semaphores[child + 1]);
+            }
+
+            // Close the semaphore
+            sem_close(semaphores[child]);
+            exit(0);
+        }
+    }
+
+    // Parent process waiting for all child processes to finish
+    while (wait(NULL) > 0) {}
+
+    // Clean up semaphores
+    for (int i = 0; i < num_children; i++) {
+        char sem_name[20];
+        snprintf(sem_name, sizeof(sem_name), "/child_sem_%d", i);
+        sem_unlink(sem_name);
+    }
+
+    printf("All images generated\n");
+
+    return 0;
+}
+
+
+    // to collect runtime 
+//    clock_t end_time = clock();
+//    double elapsed_time = ((double)(end_time - start_time)) / CLOCKS_PER_SEC;
+//   printf("Runtime for %d children: %.4f seconds\n", num_children, elapsed_time);
 
 
 
