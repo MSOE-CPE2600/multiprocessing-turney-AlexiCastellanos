@@ -86,9 +86,13 @@ The mandel program was modified. This program utilized child processes to genera
 ![Screenshot](CPE2600_lab11.png) 
 
 1 - 42.522
-2 - 28.259 
+
+2- 28.259 
+
 5 - 13.174
+
 10 - 8.058
+
 20 - 5.398
 
 
