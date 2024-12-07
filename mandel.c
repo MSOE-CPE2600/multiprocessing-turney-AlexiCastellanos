@@ -27,33 +27,84 @@
 #include <time.h>
 #include "jpegrw.h"
 #include <fcntl.h>  // for O_CREAT
-
+#include <pthread.h>
+#include <sys/stat.h>
 
 #define NUM_FRAMES 50
+#define MAX_ITER 1000
 
-//prototypes
+// Prototypes
 static int iteration_to_color(int i, int max);
 static int iterations_at_point(double x, double y, int max);
-static void compute_image(imgRawImage *img, double xmin, double xmax,
-                           double ymin, double ymax, int max);
 static void show_help();
 
+typedef struct {
+    imgRawImage *img;
+    double xmin, xmax, ymin, ymax;
+    int max;
+    int start_row, end_row;
+    int thread_id;
+} ThreadData;
+
+void *compute_image_part(void *arg) {
+    ThreadData *data = (ThreadData *)arg;
+    imgRawImage *img = data->img;
+    int width = img->width;
+
+    printf("Thread %d started: handling rows from %d to %d\n", data->thread_id, data->start_row, data->end_row);
+
+    for (int j = data->start_row; j < data->end_row; j++) {
+        for (int i = 0; i < width; i++) {
+            double x = data->xmin + i * (data->xmax - data->xmin) / width;
+            double y = data->ymin + j * (data->ymax - data->ymin) / img->height;
+            int iters = iterations_at_point(x, y, data->max);
+            setPixelCOLOR(img, i, j, iteration_to_color(iters, data->max));
+        }
+    }
+
+    printf("Thread %d finished: handled rows from %d to %d\n", data->thread_id, data->start_row, data->end_row);
+    return NULL;
+}
+
 // Function to generate a single Mandelbrot frame and save it as a JPEG image
-void generateMandelFrame(double x, double y, double scale, const char *outfile, int image_width, int image_height, int max)
-{
+void generate_mandel_frame(double x, double y, double scale, const char *outfile, int image_width, int image_height, int max, int num_threads) {
     imgRawImage *img = initRawImage(image_width, image_height);
     setImageCOLOR(img, 0);
-    compute_image(img, x - scale / 2, x + scale / 2, y - scale / 2, y + scale / 2, max);
+
+    pthread_t threads[num_threads];
+    ThreadData thread_data[num_threads];
+    int rows_per_thread = image_height / num_threads;
+    int remaining_rows = image_height % num_threads;
+
+    for (int t = 0; t < num_threads; t++) {
+        thread_data[t].img = img;
+        thread_data[t].xmin = x - scale / 2;
+        thread_data[t].xmax = x + scale / 2;
+        thread_data[t].ymin = y - scale / 2;
+        thread_data[t].ymax = y + scale / 2;
+        thread_data[t].max = max;
+        thread_data[t].start_row = t * rows_per_thread;
+        thread_data[t].end_row = (t == num_threads - 1) ? (thread_data[t].start_row + rows_per_thread + remaining_rows) : (thread_data[t].start_row + rows_per_thread);
+        thread_data[t].thread_id = t;
+
+        if (pthread_create(&threads[t], NULL, compute_image_part, &thread_data[t]) != 0) {
+            perror("Failed to create thread");
+            exit(1);
+        }
+    }
+
+    for (int t = 0; t < num_threads; t++) {
+        pthread_join(threads[t], NULL);
+    }
+
     storeJpegImageFile(img, outfile);
     freeRawImage(img);
 }
 
-int main(int argc, char *argv[])
-{
+int main(int argc, char *argv[]) {
     char c;
 
-    // These are the default configuration values used
-    // if no command line arguments are given.
+    // Default configuration values
     double xcenter = 0;
     double ycenter = 0;
     double xscale = 4;
@@ -61,14 +112,12 @@ int main(int argc, char *argv[])
     int image_height = 1000;
     int max = 1000;
     int num_children = 1; // default number of children
+    int num_threads = 1; // default number of threads
     char output_filename[256] = "mandel_frame"; // Default filename prefix
 
-    // For each command line argument given,
-    // override the appropriate configuration value.
-    while ((c = getopt(argc, argv, "x:y:s:W:H:m:o:c:h")) != -1)
-    {
-        switch (c)
-        {
+    // Command line argument parsing
+    while ((c = getopt(argc, argv, "x:y:s:W:H:m:o:c:t:h")) != -1) {
+        switch (c) {
             case 'x':
                 xcenter = atof(optarg);
                 break;
@@ -94,6 +143,13 @@ int main(int argc, char *argv[])
             case 'c':
                 num_children = atoi(optarg);
                 break;
+            case 't':
+                num_threads = atoi(optarg);
+                if (num_threads < 1 || num_threads > 20) {
+                    fprintf(stderr, "Invalid number of threads. Use 1-20.\n");
+                    exit(1);
+                }
+                break;
             case 'h':
                 show_help();
                 exit(1);
@@ -107,18 +163,22 @@ int main(int argc, char *argv[])
 
     printf("Generating Mandel movie with %d images using %d children...\n", NUM_FRAMES, num_children);
 
+    // Create semaphore to enforce order
+    sem_t *sem = sem_open("/mandel_semaphore", O_CREAT | O_EXCL, 0644, 1);
+    if (sem == SEM_FAILED) {
+        sem_unlink("/mandel_semaphore");
+        sem = sem_open("/mandel_semaphore", O_CREAT, 0644, 1);
+        if (sem == SEM_FAILED) {
+            perror("Semaphore creation failed");
+            exit(1);
+        }
+    }
+
     // Calculate frames assigned to each child process
     int frames_per_child = NUM_FRAMES / num_children;
     int remaining_frames = NUM_FRAMES % num_children;
 
-    // Create semaphores to enforce order
-    sem_t *semaphores[num_children];
-    for (int i = 0; i < num_children; i++) {
-        char sem_name[20];
-        snprintf(sem_name, sizeof(sem_name), "/child_sem_%d", i);
-        semaphores[i] = sem_open(sem_name, O_CREAT, 0644, (i == 0) ? 1 : 0);
-    }
-
+    // Fork child processes
     for (int child = 0; child < num_children; child++) {
         pid_t pid = fork();
 
@@ -129,151 +189,75 @@ int main(int argc, char *argv[])
 
         if (pid == 0) {
             // Child process code
+            sem_wait(sem);
+            int start_frame = child * frames_per_child;
+            int end_frame = start_frame + frames_per_child;
 
-            // Wait for its turn
-            sem_wait(semaphores[child]);
-
-            // Determine the frames this child will generate
-            int start_frame = child * frames_per_child + (child < remaining_frames ? child : remaining_frames) + 1;
-            int end_frame = start_frame + frames_per_child - 1;
-
-            if (child < remaining_frames) {
-                end_frame++;
+            if (child == num_children - 1) {
+                end_frame += remaining_frames;
             }
 
-            // Print assigned frames
-            printf("Child %d assigned frames from %d to %d\n", child, start_frame, end_frame);
-
-            // Generate frames for this child process
-            for (int frame = start_frame; frame <= end_frame; frame++) {
+            for (int frame = start_frame; frame < end_frame; frame++) {
                 double scale = xscale / (1 + frame * 0.1);
                 char frame_outfile[300];
-                snprintf(frame_outfile, sizeof(frame_outfile), "%s_%d.jpg", output_filename, frame);
+                snprintf(frame_outfile, sizeof(frame_outfile), "%s_%d.jpg", output_filename, frame + 1);
 
-                generateMandelFrame(xcenter, ycenter, scale, frame_outfile, image_width, image_height, max);
-
-                printf("Child %d generated frame %d\n", child, frame);
+                generate_mandel_frame(xcenter, ycenter, scale, frame_outfile, image_width, image_height, max, num_threads);
+                printf("Child %d generated frame %d\n", child, frame + 1);
             }
 
-            // Signal the next child, if it exists
-            if (child + 1 < num_children) {
-                sem_post(semaphores[child + 1]);
-            }
-
-            // Close the semaphore
-            sem_close(semaphores[child]);
+            sem_post(sem);
             exit(0);
         }
     }
 
-    // Parent process waiting for all child processes to finish
-    while (wait(NULL) > 0) {}
+    // Parent waits for all children to complete
+    while (wait(NULL) > 0);
 
-    // Clean up semaphores
-    for (int i = 0; i < num_children; i++) {
-        char sem_name[20];
-        snprintf(sem_name, sizeof(sem_name), "/child_sem_%d", i);
-        sem_unlink(sem_name);
-    }
+    sem_close(sem);
+    sem_unlink("/mandel_semaphore");
 
-    printf("All images generated\n");
+    printf("All images generated successfully.\n");
 
     return 0;
 }
 
+// Calculate the number of iterations at a point
+int iterations_at_point(double x, double y, int max) {
+    double x0 = x;
+    double y0 = y;
+    int iter = 0;
 
-    // to collect runtime 
-//    clock_t end_time = clock();
-//    double elapsed_time = ((double)(end_time - start_time)) / CLOCKS_PER_SEC;
-//   printf("Runtime for %d children: %.4f seconds\n", num_children, elapsed_time);
+    while ((x * x + y * y <= 4) && iter < max) {
+        double xt = x * x - y * y + x0;
+        double yt = 2 * x * y + y0;
+        x = xt;
+        y = yt;
+        iter++;
+    }
 
-
-
-/*
-Return the number of iterations at point x, y
-in the Mandelbrot space, up to a maximum of max.
-*/
-
-int iterations_at_point( double x, double y, int max )
-{
-	double x0 = x;
-	double y0 = y;
-
-	int iter = 0;
-
-	while( (x*x + y*y <= 4) && iter < max ) {
-
-		double xt = x*x - y*y + x0;
-		double yt = 2*x*y + y0;
-
-		x = xt;
-		y = yt;
-
-		iter++;
-	}
-
-	return iter;
+    return iter;
 }
 
-/*
-Compute an entire Mandelbrot image, writing each point to the given bitmap.
-Scale the image to the range (xmin-xmax,ymin-ymax), limiting iterations to "max"
-*/
-
-void compute_image(imgRawImage* img, double xmin, double xmax, double ymin, double ymax, int max )
-{
-	int i,j;
-
-	int width = img->width;
-	int height = img->height;
-
-	// For every pixel in the image...
-
-	for(j=0;j<height;j++) {
-
-		for(i=0;i<width;i++) {
-
-			// Determine the point in x,y space for that pixel.
-			double x = xmin + i*(xmax-xmin)/width;
-			double y = ymin + j*(ymax-ymin)/height;
-
-			// Compute the iterations at that point.
-			int iters = iterations_at_point(x,y,max);
-
-			// Set the pixel in the bitmap.
-			setPixelCOLOR(img,i,j,iteration_to_color(iters,max));
-		}
-	}
+// Convert an iteration number to a color
+int iteration_to_color(int iters, int max) {
+    return 0xFFFFFF * iters / max;
 }
-
-
-/*
-Convert a iteration number to a color.
-Here, we just scale to gray with a maximum of imax.
-Modify this function to make more interesting colors.
-*/
-int iteration_to_color( int iters, int max )
-{
-	int color = 0xFFFFFF*iters/(double)max;
-	return color;
-}
-
 
 // Show help message
-void show_help()
-{
-	printf("Use: mandel [options]\n");
-	printf("Where options are:\n");
-	printf("-m <max>    The maximum number of iterations per point. (default=1000)\n");
-	printf("-x <coord>  X coordinate of image center point. (default=0)\n");
-	printf("-y <coord>  Y coordinate of image center point. (default=0)\n");
-	printf("-s <scale>  Scale of the image in Mandlebrot coordinates (X-axis). (default=4)\n");
-	printf("-W <pixels> Width of the image in pixels. (default=1000)\n");
-	printf("-H <pixels> Height of the image in pixels. (default=1000)\n");
-	printf("-o <file>   Set output file. (default=mandel.bmp)\n");
-	printf("-h          Show this help text.\n");
-	printf("\nSome examples are:\n");
-	printf("mandel -x -0.5 -y -0.5 -s 0.2\n");
-	printf("mandel -x -.38 -y -.665 -s .05 -m 100\n");
-	printf("mandel -x 0.286932 -y 0.014287 -s .0005 -m 1000\n\n");
+void show_help() {
+    printf("Use: mandel [options]\n");
+    printf("Where options are:\n");
+    printf("-m <max>    The maximum number of iterations per point. (default=1000)\n");
+    printf("-x <coord>  X coordinate of image center point. (default=0)\n");
+    printf("-y <coord>  Y coordinate of image center point. (default=0)\n");
+    printf("-s <scale>  Scale of the image in Mandlebrot coordinates (X-axis). (default=4)\n");
+    printf("-W <pixels> Width of the image in pixels. (default=1000)\n");
+    printf("-H <pixels> Height of the image in pixels. (default=1000)\n");
+    printf("-o <file>   Set output file. (default=mandel.bmp)\n");
+    printf("-h          Show this help text.\n");
+    printf("\nSome examples are:\n");
+    printf("mandel -x -0.5 -y -0.5 -s 0.2\n");
+    printf("mandel -x -.38 -y -.665 -s .05 -m 100\n");
+    printf("mandel -x 0.286932 -y 0.014287 -s .0005 -m 1000\n\n");
 }

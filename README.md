@@ -6,6 +6,10 @@ This repository contains a Mandelbrot fractal generator and a movie generator pr
 
 The Mandelbrot set is a well-known fractal that exhibits intricate patterns and complex structures. This program generates multiple frames, each representing a different zoom level into the set, which can later be combined to create an animation.
 
+## Multithreading Implementation Overview
+The Mandelbrot generation program uses multithreading to speed up the computation of each frame. I utilized the `pthread` library to create multiple threads within each child process, allowing for parallel computation of the image rows. Each thread is assigned a specific range of rows, and this division of work helps to reduce the overall runtime significantly by leveraging the multicore capabilities of the CPU.
+
+
 ### Features
 - Generate multiple frames of the Mandelbrot set in JPEG format.
 - Adjustable parameters for zoom level, image resolution, maximum iterations, and more.
@@ -97,3 +101,13 @@ The mandel program was modified. This program utilized child processes to genera
 
 
 as displayed through the data above and my graph shows that the more children processes there are, the smaller the runtime. However, it seems as if the number of children stopped helping the speedup over time because the graph appears as if it is starting to plateau
+
+## Discussion of Results
+
+## Results
+![Screenshot](CPE2600_lab12.png) 
+### Impact of Multithreading vs. Multiprocessing
+When analyzing the runtime results, it appears that multiprocessing had a more significant impact on reducing the runtime compared to multithreading. This is likely because creating multiple processes allows work to be distributed across multiple cores more effectively, reducing contention for resources.
+
+### Optimal Runtime and Sweet Spot
+There seemed to be a "sweet spot" for optimal runtime when using 3 child processes with 8 threads each. At this combination, the runtime was minimized, suggesting that the workload was efficiently balanced between processes and threads without overwhelming the system's resources. Increasing the number of threads beyond 8 did not show significant improvements.
