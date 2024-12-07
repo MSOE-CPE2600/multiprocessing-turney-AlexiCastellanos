@@ -14,6 +14,12 @@
 * Date: 11/26/24
 * Description: This program generates animated Mandelbrot set frames as JPEG images using parallel
 *  processing with synchronized child processes and customizable parameters for center, scale, resolution, and iterations.
+* --- added multithreading implementations--
+*   - Multi-threaded row-based computation for image generation.
+*  - Multi-process parallelism for generating multiple frames.
+*  - Frame outputs stored as JPEG images.
+*  - Synchronization between processes using semaphores
+*
 *
 ***/
 
