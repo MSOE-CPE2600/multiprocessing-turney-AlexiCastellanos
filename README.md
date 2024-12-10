@@ -105,7 +105,7 @@ as displayed through the data above and my graph shows that the more children pr
 ## Discussion of Results
 
 ## Results
-![Screenshot](CPE2600_lab12.png) 
+![Screenshot](CPE2600_Lab12.png) 
 ### Impact of Multithreading vs. Multiprocessing
 When analyzing the runtime results, it appears that multiprocessing had a more significant impact on reducing the runtime compared to multithreading. This is likely because creating multiple processes allows work to be distributed across multiple cores more effectively, reducing contention for resources.
 
